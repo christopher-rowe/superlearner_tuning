@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from pmlb import classification_dataset_names, regression_dataset_names, fetch_data
 from sklearn.preprocessing import StandardScaler
-import superlearner_tuning_pmlb as slt
+import superlearner_tuning as slt
 from models_test import *
 
 def main():
@@ -45,10 +45,16 @@ def main():
         # actual validation metrics
         all_results_single_dataset = pd.DataFrame(all_results_single_dataset, 
                                                   columns = ['dataset', 'fold', 'linear_regression',
-                                                             'sl_full', 'sl_best_subset_1',
-                                                             'sl_best_subset_3', 'sl_best_subset_5',
-                                                             'sl_ga_subset', 'sl_random_subset',
-                                                             'sl_default_subset', 'discrete_sl'])
+                                                             'sl_full', 'sl_best_grid_1',
+                                                             'sl_best_grid_3', 'sl_best_grid_5',
+                                                             'sl_best_random10_1', 'sl_best_random10_3', 
+                                                             'sl_best_random10_5', 'sl_best_random25_1', 
+                                                             'sl_best_random25_3', 'sl_best_random25_5', 
+                                                             'sl_best_random50_1', 'sl_best_random50_3', 
+                                                             'sl_best_random50_5', 'sl_best_random100_1', 
+                                                             'sl_best_random100_3', 'sl_best_random100_5',                                                                    
+                                                             'sl_ga_subset', 'sl_default_subset', 
+                                                             'discrete_sl'])
 
         # indices for base learners selected as input into SuperLearner                                      
         all_sl_all_single_dataset = pd.DataFrame(all_sl_all_single_dataset, 
@@ -71,6 +77,9 @@ def main():
         all_sl_all = pd.concat([all_sl_all, all_sl_all_single_dataset], ignore_index=True)
         all_sl_nonzero = pd.concat([all_sl_nonzero, all_sl_nonzero_single_dataset], ignore_index=True)
         all_cv_mse = pd.concat([all_cv_mse, all_cv_mse_single_dataset], ignore_index=True)
+
+        # print statement
+        print("Finished with " + dataset + "!")
 
     # model and parameters
     all_model_types = [type(model).__name__ for model in all_models]

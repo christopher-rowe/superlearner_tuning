@@ -102,18 +102,25 @@ def getMSEandPredictions(X, y, models):
     
     return np.vstack(meta_X), np.asarray(meta_y), mean_cv_mse
 
-def getModelIndices(model_list, subset, cv_mse = None, num_models = None):
+def getModelIndices(model_list, subset, cv_mse = None, n_random_iter = None, num_models = None):
     """Get model indices to allow subsetting of models and out-of-sample
        predictions
 
     Args:
         model_list (list): list of all model objects
-        subset (str): 'best' to obtain model(s) with best MSE of each
-                       model type; 'default' for default hyperparameters
-        cv_mse (list, optional): Only needed for 'best' subset option,
-                                 list of CV MSE for each model type, allows
-                                 for identification of 'best' models. 
+        subset (str): 'best_grid' to obtain model(s) with best MSE of each
+                       model type identified via exhaustive grid search; 
+                       'best_random' to obtain model(s) with best MSE of each
+                       model type identified via random grid search;
+                       'default' for default hyperparameters
+        cv_mse (list, optional): Only needed for 'best_grid' and 'best_random'
+                                 subset option, list of CV MSE for each model type, 
+                                 allows for identification of 'best' models. 
                                  Defaults to None.
+        n_random_iter (int, optional): Only needed for 'best_random' subset option, 
+                                       number of random iterations to identify
+                                       'best' models via random grid search. 
+                                       Defaults to None.
         num_models (int, optional): Only needed for 'best' subset option,
                                     number of each model type to be retained. 
                                     Defaults to None.
@@ -125,12 +132,27 @@ def getModelIndices(model_list, subset, cv_mse = None, num_models = None):
     # get list of model types
     model_type = [type(model).__name__ for model in model_list]
 
-    # get indices for best(re: MSE) models
-    if subset == 'best':
+    # get indices for best(re: MSE) models via full grid search
+    if subset == 'best_grid':
 
          # collect model type and cv_mse into  dataframe
         all_cv_mse = pd.DataFrame({'type': model_type,
-                                'mse': cv_mse})
+                                   'mse': cv_mse})
+
+        # identify indices for (num_models) models with minimum mse for each model type
+        multi_indices = all_cv_mse.groupby('type')['mse'].nsmallest(num_models).index
+        indices = multi_indices.get_level_values(1).values.tolist()
+
+    # get indices for best(re: MSE) models via random grid search
+    if subset == 'best_random':
+
+         # collect model type and cv_mse into  dataframe
+        all_cv_mse = pd.DataFrame({'type': model_type,
+                                   'mse': cv_mse})
+
+        # identify random subset based on number of random iterations
+        all_cv_mse = all_cv_mse.sample(frac = 1.0).groupby('type').head(n_random_iter)                           
+
 
         # identify indices for (num_models) models with minimum mse for each model type
         multi_indices = all_cv_mse.groupby('type')['mse'].nsmallest(num_models).index
@@ -228,8 +250,10 @@ def fitMetaModel(X, y, nz = True):
                         compressed vector of non-zero NNLS coefficients.
     """
 
-    # obtain nnls coefficients
+    # obtain nnls coefficients and scale to sum to one
     nnls_coef = nnls(X, y)[0]
+    nnls_coef = nnls_coef/nnls_coef.sum()
+    
 
     # if nz == True, return full vector as well as only non-zero coefficients
     if nz == True:
@@ -300,75 +324,6 @@ def superLearnerPredictions(X, models, meta_coef):
 
 	# return predictions
     return np.dot(meta_coef, meta_X.T)       
-
-def getBestRandomIndices(meta_X, meta_y, cv_mse, n_iterations, num_models):
-    """Obtain indices of combination of base models that provide lowest
-       SuperLearner MSE, select base models with probability inversely 
-       proportional to CV MSE
-
-    Args:
-        meta_X (numpy array): out-of-sample predictions
-        meta_y (numpy array): observed outcome vector
-        cv_mse (list): CV MSE for each base model
-        n_iterations (int): Number of random iterations
-        num_models ([type]): Number of base models to include in randomly
-                             selected SuperLearner ('random' will randomly
-                             vary the number of models included))
-
-    Returns:
-        list: indices for base models that provide best SuperLearner MSE
-    """
-
-    # initialize random selection probabilites (inversely proportional to CV MSE)
-    model_prob = (1/cv_mse)/((1/cv_mse).sum())
-
-    # initialize empty lists for storing random indices and training MSE
-    all_random_indices = []
-    all_train_mse_sl_random = []
-
-    # iterate
-    for _ in range(n_iterations):
-
-        # if appropriate, select random number of models
-        if num_models == 'random':
-            num_models_i = np.random.choice(a =  np.arange(1, meta_X.shape[1]))
-        else:
-            num_models_i = num_models
-
-        # draw random indicies with probability inversely proportional to CV MSE
-        random_indices = np.random.choice(a = range(meta_X.shape[1]), 
-                                          size = num_models_i,
-                                          replace = False,
-                                          p = model_prob)
-
-        # save random indices
-        all_random_indices.append(random_indices)
-
-        # subset meta_X columns (i.e., base models) using random indices
-        meta_X_random_subset = subsetMetaX(meta_X, random_indices)
-
-        # fit meta model with only random base-models
-        meta_coef_random_subset = fitMetaModel(meta_X_random_subset, 
-                                               meta_y,
-                                               nz = False)
-
-        # calcualte MSE of meta model using random base learners
-        train_mse_sl_random = mean_squared_error(meta_y, 
-                                                 np.dot(meta_coef_random_subset, 
-                                                        meta_X_random_subset.T))
-
-        # save MSE
-        all_train_mse_sl_random.append(train_mse_sl_random)
-        
-    # identiy index with lowest MSE 
-    lowest_mse_index = [idx for idx, element in enumerate(all_train_mse_sl_random) if element == min(all_train_mse_sl_random)][0]
-
-    # conver to to list and sort
-    indices = all_random_indices[lowest_mse_index].tolist()
-    indices.sort()
-
-    # return best random indices
-    return indices
 
 def getGeneticIndices(meta_X, meta_y):
     """Obtain indices of base models selected using genetic algorithm
@@ -455,62 +410,202 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, fo
 
     # get indices for each hyperparameter strategy
     print('--Getting model indices for each strategy...')
-    best_cv_mse_indices_1 = getModelIndices(model_list = all_models, 
-                                            subset = 'best', cv_mse = cv_mse,
-                                            num_models = 1)
-    best_cv_mse_indices_3 = getModelIndices(model_list = all_models, 
-                                            subset = 'best', cv_mse = cv_mse,
-                                            num_models = 3)                                    
-    best_cv_mse_indices_5 = getModelIndices(model_list = all_models, 
-                                            subset = 'best', cv_mse = cv_mse,
-                                            num_models = 5)
+
+    # initialize function arguments to get each set of indices
+    mod_index_params = [{'model_list': all_models, 'subset': 'best_grid', 
+                         'cv_mse': cv_mse, 'num_models': 1},
+                        {'model_list': all_models, 'subset': 'best_grid', 
+                         'cv_mse': cv_mse, 'num_models': 3},
+                         {'model_list': all_models, 'subset': 'best_grid', 
+                         'cv_mse': cv_mse, 'num_models': 5},
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 10, 'num_models': 1},    
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 10, 'num_models': 3},  
+                         {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 10, 'num_models': 5},  
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 25, 'num_models': 1},  
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 25, 'num_models': 3},  
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 25, 'num_models': 5},                                                                                                                           
+                         {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 50, 'num_models': 1},  
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 50, 'num_models': 3},  
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 50, 'num_models': 5},       
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 100, 'num_models': 1},  
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 100, 'num_models': 3},  
+                        {'model_list': all_models, 'subset': 'best_random', 
+                         'cv_mse': cv_mse, 'n_random_iter': 100, 'num_models': 5},
+                        {'model_list': all_models, 'subset': 'default'}]
+
+    # get indices
+    indices_list = [getModelIndices(**params) for params in mod_index_params]
+    indices_list.insert(0, list(range(len(all_models))))
+    indices_list.append(getGeneticIndices(meta_X, meta_y))
+
+    # old ***
+    best_grid_cv_mse_indices_1 = getModelIndices(model_list = all_models, 
+                                                 subset = 'best_grid', cv_mse = cv_mse,
+                                                 num_models = 1)
+    best_grid_cv_mse_indices_3 = getModelIndices(model_list = all_models, 
+                                                 subset = 'best_grid', cv_mse = cv_mse,
+                                                 num_models = 3)                                    
+    best_grid_cv_mse_indices_5 = getModelIndices(model_list = all_models, 
+                                                 subset = 'best_grid', cv_mse = cv_mse,
+                                                 num_models = 5)
+    best_random10_cv_mse_indices_1 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 10, num_models = 1)
+    best_random10_cv_mse_indices_3 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 10, num_models = 3)                                    
+    best_random10_cv_mse_indices_5 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 10, num_models = 5)     
+    best_random25_cv_mse_indices_1 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 25, num_models = 1)
+    best_random25_cv_mse_indices_3 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 25, num_models = 3)                                    
+    best_random25_cv_mse_indices_5 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 25, num_models = 5)                                                                                                    
+    best_random50_cv_mse_indices_1 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 50, num_models = 1)
+    best_random50_cv_mse_indices_3 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 50, num_models = 3)                                    
+    best_random50_cv_mse_indices_5 = getModelIndices(model_list = all_models, 
+                                                     subset = 'best_random', cv_mse = cv_mse,
+                                                     n_random_iter = 50, num_models = 5)      
+    best_random100_cv_mse_indices_1 = getModelIndices(model_list = all_models, 
+                                                      subset = 'best_random', cv_mse = cv_mse,
+                                                      n_random_iter = 100, num_models = 1)
+    best_random100_cv_mse_indices_3 = getModelIndices(model_list = all_models, 
+                                                      subset = 'best_random', cv_mse = cv_mse,
+                                                      n_random_iter = 100, num_models = 3)                                    
+    best_random100_cv_mse_indices_5 = getModelIndices(model_list = all_models, 
+                                                      subset = 'best_random', cv_mse = cv_mse,
+                                                      n_random_iter = 100, num_models = 5)        
     default_indices = getModelIndices(model_list = all_models,
-                                    subset = 'default')
-    random_indices = getBestRandomIndices(meta_X, meta_y, 
-                                        cv_mse, n_iterations = 1000,
-                                        num_models = 'random')
+                                      subset = 'default')
     ga_indices = getGeneticIndices(meta_X, meta_y)
+    # old ***
+
 
     # subset meta_X (i.e. base learner predictions) for each hyperparameter strategy
     print('--Subsetting base learner predictions for each strategy...')
-    meta_X_best_subset_1 = subsetMetaX(meta_X, best_cv_mse_indices_1)
-    meta_X_best_subset_3 = subsetMetaX(meta_X, best_cv_mse_indices_3)
-    meta_X_best_subset_5 = subsetMetaX(meta_X, best_cv_mse_indices_5)    
+    meta_X_list = [subsetMetaX(meta_X, inds) for inds in indices_list]
+
+    # old ***
+    meta_X_best_grid_subset_1 = subsetMetaX(meta_X, best_grid_cv_mse_indices_1)
+    meta_X_best_grid_subset_3 = subsetMetaX(meta_X, best_grid_cv_mse_indices_3)
+    meta_X_best_grid_subset_5 = subsetMetaX(meta_X, best_grid_cv_mse_indices_5)   
+    meta_X_best_random10_subset_1 = subsetMetaX(meta_X, best_random10_cv_mse_indices_1)
+    meta_X_best_random10_subset_3 = subsetMetaX(meta_X, best_random10_cv_mse_indices_3)
+    meta_X_best_random10_subset_5 = subsetMetaX(meta_X, best_random10_cv_mse_indices_5)     
+    meta_X_best_random25_subset_1 = subsetMetaX(meta_X, best_random25_cv_mse_indices_1)
+    meta_X_best_random25_subset_3 = subsetMetaX(meta_X, best_random25_cv_mse_indices_3)
+    meta_X_best_random25_subset_5 = subsetMetaX(meta_X, best_random25_cv_mse_indices_5)   
+    meta_X_best_random50_subset_1 = subsetMetaX(meta_X, best_random50_cv_mse_indices_1)
+    meta_X_best_random50_subset_3 = subsetMetaX(meta_X, best_random50_cv_mse_indices_3)
+    meta_X_best_random50_subset_5 = subsetMetaX(meta_X, best_random50_cv_mse_indices_5)    
+    meta_X_best_random100_subset_1 = subsetMetaX(meta_X, best_random100_cv_mse_indices_1)
+    meta_X_best_random100_subset_3 = subsetMetaX(meta_X, best_random100_cv_mse_indices_3)
+    meta_X_best_random100_subset_5 = subsetMetaX(meta_X, best_random100_cv_mse_indices_5)         
     meta_X_default_subset = subsetMetaX(meta_X, default_indices)
     meta_X_ga_subset = subsetMetaX(meta_X, ga_indices)
-    meta_X_random_subset = subsetMetaX(meta_X, random_indices)
+    # old ***
 
     # Fit all SuperLearners and obtain coefficients (full vector and only non-zero)
     print('--Fitting SuperLearner for each strategy...')
+    meta_coef_list, nz_meta_coef_list = zip(*[fitMetaModel(x, meta_y) for x in meta_X_list])
+    meta_coef_list = list(meta_coef_list)
+    nz_meta_coef_list = list(nz_meta_coef_list)
+
+    # old ***
     meta_coef_full, nz_meta_coef_full = fitMetaModel(meta_X, meta_y)
-    meta_coef_best_subset_1, nz_meta_coef_best_subset_1  = fitMetaModel(meta_X_best_subset_1, meta_y)
-    meta_coef_best_subset_3, nz_meta_coef_best_subset_3 = fitMetaModel(meta_X_best_subset_3, meta_y)
-    meta_coef_best_subset_5, nz_meta_coef_best_subset_5 = fitMetaModel(meta_X_best_subset_5, meta_y)
+    meta_coef_best_grid_subset_1, nz_meta_coef_best_grid_subset_1 = fitMetaModel(meta_X_best_grid_subset_1, meta_y)
+    meta_coef_best_grid_subset_3, nz_meta_coef_best_grid_subset_3 = fitMetaModel(meta_X_best_grid_subset_3, meta_y)
+    meta_coef_best_grid_subset_5, nz_meta_coef_best_grid_subset_5 = fitMetaModel(meta_X_best_grid_subset_5, meta_y)
+    meta_coef_best_random10_subset_1, nz_meta_coef_best_random10_subset_1 = fitMetaModel(meta_X_best_random10_subset_1, meta_y)
+    meta_coef_best_random10_subset_3, nz_meta_coef_best_random10_subset_3 = fitMetaModel(meta_X_best_random10_subset_3, meta_y)
+    meta_coef_best_random10_subset_5, nz_meta_coef_best_random10_subset_5 = fitMetaModel(meta_X_best_random10_subset_5, meta_y)  
+    meta_coef_best_random25_subset_1, nz_meta_coef_best_random25_subset_1 = fitMetaModel(meta_X_best_random25_subset_1, meta_y)
+    meta_coef_best_random25_subset_3, nz_meta_coef_best_random25_subset_3 = fitMetaModel(meta_X_best_random25_subset_3, meta_y)
+    meta_coef_best_random25_subset_5, nz_meta_coef_best_random25_subset_5 = fitMetaModel(meta_X_best_random25_subset_5, meta_y) 
+    meta_coef_best_random50_subset_1, nz_meta_coef_best_random50_subset_1 = fitMetaModel(meta_X_best_random50_subset_1, meta_y)
+    meta_coef_best_random50_subset_3, nz_meta_coef_best_random50_subset_3 = fitMetaModel(meta_X_best_random50_subset_3, meta_y)
+    meta_coef_best_random50_subset_5, nz_meta_coef_best_random50_subset_5 = fitMetaModel(meta_X_best_random50_subset_5, meta_y) 
+    meta_coef_best_random100_subset_1, nz_meta_coef_best_random100_subset_1 = fitMetaModel(meta_X_best_random100_subset_1, meta_y)
+    meta_coef_best_random100_subset_3, nz_meta_coef_best_random100_subset_3 = fitMetaModel(meta_X_best_random100_subset_3, meta_y)
+    meta_coef_best_random100_subset_5, nz_meta_coef_best_random100_subset_5 = fitMetaModel(meta_X_best_random100_subset_5, meta_y)           
     meta_coef_default_subset, nz_meta_coef_default_subset = fitMetaModel(meta_X_default_subset, meta_y)
     meta_coef_ga_subset, nz_meta_coef_ga_subset = fitMetaModel(meta_X_ga_subset, meta_y)
-    meta_coef_random_subset, nz_meta_coef_random_subset = fitMetaModel(meta_X_random_subset, meta_y)
+    # old ***
 
     # identify indices for models with non-zero SuperLearner coefficients
+    nonzero_mod_list = [identifyNonZeroIndices(x, y) for x, y in zip(meta_coef_list, indices_list)]
+    nonzero_mod_list.insert(0, [0]) # linear model
+    nonzero_mod_list.insert(2, [np.argmin(cv_mse).astype(int)]) # discrete superlearner
+
+    # old ***
     nonzero_mod_linear = [0]
     nonzero_mod_full = identifyNonZeroIndices(meta_coef_full, list(range(len(all_models))))
     nonzero_mod_discrete = [np.argmin(cv_mse).astype(int)]
-    nonzero_mod_best_subset_1 = identifyNonZeroIndices(meta_coef_best_subset_1, best_cv_mse_indices_1)
-    nonzero_mod_best_subset_3 = identifyNonZeroIndices(meta_coef_best_subset_3, best_cv_mse_indices_3)
-    nonzero_mod_best_subset_5 = identifyNonZeroIndices(meta_coef_best_subset_5, best_cv_mse_indices_5)
+    nonzero_mod_best_grid_subset_1 = identifyNonZeroIndices(meta_coef_best_grid_subset_1, best_grid_cv_mse_indices_1)
+    nonzero_mod_best_grid_subset_3 = identifyNonZeroIndices(meta_coef_best_grid_subset_3, best_grid_cv_mse_indices_3)
+    nonzero_mod_best_grid_subset_5 = identifyNonZeroIndices(meta_coef_best_grid_subset_5, best_grid_cv_mse_indices_5)
+    nonzero_mod_best_random10_subset_1 = identifyNonZeroIndices(meta_coef_best_random10_subset_1, best_random10_cv_mse_indices_1)
+    nonzero_mod_best_random10_subset_3 = identifyNonZeroIndices(meta_coef_best_random10_subset_3, best_random10_cv_mse_indices_3)
+    nonzero_mod_best_random10_subset_5 = identifyNonZeroIndices(meta_coef_best_random10_subset_5, best_random10_cv_mse_indices_5)
+    nonzero_mod_best_random25_subset_1 = identifyNonZeroIndices(meta_coef_best_random25_subset_1, best_random25_cv_mse_indices_1)
+    nonzero_mod_best_random25_subset_3 = identifyNonZeroIndices(meta_coef_best_random25_subset_3, best_random25_cv_mse_indices_3)
+    nonzero_mod_best_random25_subset_5 = identifyNonZeroIndices(meta_coef_best_random25_subset_5, best_random25_cv_mse_indices_5)
+    nonzero_mod_best_random50_subset_1 = identifyNonZeroIndices(meta_coef_best_random50_subset_1, best_random50_cv_mse_indices_1)
+    nonzero_mod_best_random50_subset_3 = identifyNonZeroIndices(meta_coef_best_random50_subset_3, best_random50_cv_mse_indices_3)
+    nonzero_mod_best_random50_subset_5 = identifyNonZeroIndices(meta_coef_best_random50_subset_5, best_random50_cv_mse_indices_5)
+    nonzero_mod_best_random100_subset_1 = identifyNonZeroIndices(meta_coef_best_random100_subset_1, best_random100_cv_mse_indices_1)
+    nonzero_mod_best_random100_subset_3 = identifyNonZeroIndices(meta_coef_best_random100_subset_3, best_random100_cv_mse_indices_3)
+    nonzero_mod_best_random100_subset_5 = identifyNonZeroIndices(meta_coef_best_random100_subset_5, best_random100_cv_mse_indices_5)
     nonzero_mod_default_subset = identifyNonZeroIndices(meta_coef_default_subset, default_indices)
     nonzero_mod_ga_subset = identifyNonZeroIndices(meta_coef_ga_subset, ga_indices)
-    nonzero_mod_random_subset = identifyNonZeroIndices(meta_coef_random_subset, random_indices)
+    # old ***
 
     # combine indices for all models with non-zero SuperLearner coefficients
+    all_indices = list(set([item for sublist in nonzero_mod_list for item in sublist]))
+
+    # old ***
     all_indices = list(set(nonzero_mod_linear + 
-                        nonzero_mod_full + 
-                        nonzero_mod_discrete +
-                        nonzero_mod_best_subset_1 + 
-                        nonzero_mod_best_subset_3 + 
-                        nonzero_mod_best_subset_5 + 
-                        nonzero_mod_default_subset +
-                        nonzero_mod_ga_subset +
-                        nonzero_mod_random_subset))
+                           nonzero_mod_full + 
+                           nonzero_mod_discrete +
+                           nonzero_mod_best_grid_subset_1 + 
+                           nonzero_mod_best_grid_subset_3 + 
+                           nonzero_mod_best_grid_subset_5 + 
+                           nonzero_mod_best_random10_subset_1 + 
+                           nonzero_mod_best_random10_subset_3 + 
+                           nonzero_mod_best_random10_subset_5 + 
+                           nonzero_mod_best_random25_subset_1 + 
+                           nonzero_mod_best_random25_subset_3 + 
+                           nonzero_mod_best_random25_subset_5 + 
+                           nonzero_mod_best_random50_subset_1 + 
+                           nonzero_mod_best_random50_subset_3 + 
+                           nonzero_mod_best_random50_subset_5 + 
+                           nonzero_mod_best_random100_subset_1 + 
+                           nonzero_mod_best_random100_subset_3 + 
+                           nonzero_mod_best_random100_subset_5 +                         
+                           nonzero_mod_default_subset +
+                           nonzero_mod_ga_subset))
+    # old ***
+
     all_indices.sort()
 
     # fit minimal base models on entire training dataset
@@ -518,81 +613,191 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, fo
     fitBaseModels(X_train, y_train, all_models, all_indices)
 
     # subset minimal models for each strategy
+    models_list = [subsetModels(all_models, x) for x in nonzero_mod_list]
+
+    # old ***
     models_full = subsetModels(all_models, nonzero_mod_full)
-    models_best_subset_1 = subsetModels(all_models, nonzero_mod_best_subset_1)
-    models_best_subset_3 = subsetModels(all_models, nonzero_mod_best_subset_3)
-    models_best_subset_5 = subsetModels(all_models, nonzero_mod_best_subset_5)
+    models_best_grid_subset_1 = subsetModels(all_models, nonzero_mod_best_grid_subset_1)
+    models_best_grid_subset_3 = subsetModels(all_models, nonzero_mod_best_grid_subset_3)
+    models_best_grid_subset_5 = subsetModels(all_models, nonzero_mod_best_grid_subset_5)
+    models_best_random10_subset_1 = subsetModels(all_models, nonzero_mod_best_random10_subset_1)
+    models_best_random10_subset_3 = subsetModels(all_models, nonzero_mod_best_random10_subset_3)
+    models_best_random10_subset_5 = subsetModels(all_models, nonzero_mod_best_random10_subset_5)
+    models_best_random25_subset_1 = subsetModels(all_models, nonzero_mod_best_random25_subset_1)
+    models_best_random25_subset_3 = subsetModels(all_models, nonzero_mod_best_random25_subset_3)
+    models_best_random25_subset_5 = subsetModels(all_models, nonzero_mod_best_random25_subset_5)
+    models_best_random50_subset_1 = subsetModels(all_models, nonzero_mod_best_random50_subset_1)
+    models_best_random50_subset_3 = subsetModels(all_models, nonzero_mod_best_random50_subset_3)
+    models_best_random50_subset_5 = subsetModels(all_models, nonzero_mod_best_random50_subset_5)
+    models_best_random100_subset_1 = subsetModels(all_models, nonzero_mod_best_random100_subset_1)
+    models_best_random100_subset_3 = subsetModels(all_models, nonzero_mod_best_random100_subset_3)
+    models_best_random100_subset_5 = subsetModels(all_models, nonzero_mod_best_random100_subset_5)
     models_default_subset = subsetModels(all_models, nonzero_mod_default_subset)
     models_ga_subset = subsetModels(all_models, nonzero_mod_ga_subset)
-    models_random_subset = subsetModels(all_models, nonzero_mod_random_subset)
+    # old ***
 
     # evalute miminal base models 
     print('--Evaluating performance...')
     val_mse_all_models = evaluateBaseModels(X_test, y_test, all_models, all_indices)
 
     # Obtain SuperLearner Predictions for each strategy
+    del models_list[0] # drop linear regression
+    del models_list[1] # drop discrete superlearner
+    sl_yhat_list = [superLearnerPredictions(X_test, x, y) for x, y in zip(models_list, nz_meta_coef_list)]
+
+    # old ***
     sl_yhat_full = superLearnerPredictions(X_test, 
-                                        models_full, 
-                                        nz_meta_coef_full)
-    sl_yhat_best_subset_1 = superLearnerPredictions(X_test, 
-                                                    models_best_subset_1, 
-                                                    nz_meta_coef_best_subset_1)
-    sl_yhat_best_subset_3 = superLearnerPredictions(X_test, 
-                                                    models_best_subset_3, 
-                                                    nz_meta_coef_best_subset_3)
-    sl_yhat_best_subset_5 = superLearnerPredictions(X_test, 
-                                                    models_best_subset_5, 
-                                                    nz_meta_coef_best_subset_5)
+                                           models_full, 
+                                           nz_meta_coef_full)
+    sl_yhat_best_grid_subset_1 = superLearnerPredictions(X_test, 
+                                                         models_best_grid_subset_1, 
+                                                         nz_meta_coef_best_grid_subset_1)
+    sl_yhat_best_grid_subset_3 = superLearnerPredictions(X_test, 
+                                                         models_best_grid_subset_3, 
+                                                         nz_meta_coef_best_grid_subset_3)
+    sl_yhat_best_grid_subset_5 = superLearnerPredictions(X_test, 
+                                                         models_best_grid_subset_5, 
+                                                         nz_meta_coef_best_grid_subset_5)
+    sl_yhat_best_random10_subset_1 = superLearnerPredictions(X_test, 
+                                                         models_best_random10_subset_1, 
+                                                         nz_meta_coef_best_random10_subset_1)
+    sl_yhat_best_random10_subset_3 = superLearnerPredictions(X_test, 
+                                                         models_best_random10_subset_3, 
+                                                         nz_meta_coef_best_random10_subset_3)
+    sl_yhat_best_random10_subset_5 = superLearnerPredictions(X_test, 
+                                                         models_best_random10_subset_5, 
+                                                         nz_meta_coef_best_random10_subset_5)
+    sl_yhat_best_random25_subset_1 = superLearnerPredictions(X_test, 
+                                                         models_best_random25_subset_1, 
+                                                         nz_meta_coef_best_random25_subset_1)
+    sl_yhat_best_random25_subset_3 = superLearnerPredictions(X_test, 
+                                                         models_best_random25_subset_3, 
+                                                         nz_meta_coef_best_random25_subset_3)
+    sl_yhat_best_random25_subset_5 = superLearnerPredictions(X_test, 
+                                                         models_best_random25_subset_5, 
+                                                         nz_meta_coef_best_random25_subset_5)
+    sl_yhat_best_random50_subset_1 = superLearnerPredictions(X_test, 
+                                                         models_best_random50_subset_1, 
+                                                         nz_meta_coef_best_random50_subset_1)
+    sl_yhat_best_random50_subset_3 = superLearnerPredictions(X_test, 
+                                                         models_best_random50_subset_3, 
+                                                         nz_meta_coef_best_random50_subset_3)
+    sl_yhat_best_random50_subset_5 = superLearnerPredictions(X_test, 
+                                                         models_best_random50_subset_5, 
+                                                         nz_meta_coef_best_random50_subset_5)
+    sl_yhat_best_random100_subset_1 = superLearnerPredictions(X_test, 
+                                                         models_best_random100_subset_1, 
+                                                         nz_meta_coef_best_random100_subset_1)
+    sl_yhat_best_random100_subset_3 = superLearnerPredictions(X_test, 
+                                                         models_best_random100_subset_3, 
+                                                         nz_meta_coef_best_random100_subset_3)
+    sl_yhat_best_random100_subset_5 = superLearnerPredictions(X_test, 
+                                                         models_best_random100_subset_5, 
+                                                         nz_meta_coef_best_random100_subset_5)
     sl_yhat_default_subset = superLearnerPredictions(X_test, 
-                                                    models_default_subset,
-                                                    nz_meta_coef_default_subset)
+                                                     models_default_subset,
+                                                     nz_meta_coef_default_subset)
     sl_yhat_ga_subset = superLearnerPredictions(X_test, 
                                                 models_ga_subset,
                                                 nz_meta_coef_ga_subset)
-    sl_yhat_random_subset = superLearnerPredictions(X_test, 
-                                                    models_random_subset,
-                                                    nz_meta_coef_random_subset)
+    # old ***
+
 
     # evaluate performance of each SuperLearner against test data
+    val_mse_list = [mean_squared_error(y_test, x) for x in sl_yhat_list]
+    val_mse_list.insert(0, val_mse_all_models[0]) # linear regression
+    val_mse_list.append(val_mse_all_models[all_indices.index(np.argmin(cv_mse))]) # linear regression
+
+    # old**
     val_mse_linear_regression = val_mse_all_models[0]
     val_mse_sl_full = mean_squared_error(y_test, sl_yhat_full)
-    val_mse_sl_best_subset_1 = mean_squared_error(y_test, sl_yhat_best_subset_1)
-    val_mse_sl_best_subset_3 = mean_squared_error(y_test, sl_yhat_best_subset_3)
-    val_mse_sl_best_subset_5 = mean_squared_error(y_test, sl_yhat_best_subset_5)       
+    val_mse_sl_best_grid_subset_1 = mean_squared_error(y_test, sl_yhat_best_grid_subset_1)
+    val_mse_sl_best_grid_subset_3 = mean_squared_error(y_test, sl_yhat_best_grid_subset_3)
+    val_mse_sl_best_grid_subset_5 = mean_squared_error(y_test, sl_yhat_best_grid_subset_5)  
+    val_mse_sl_best_random10_subset_1 = mean_squared_error(y_test, sl_yhat_best_random10_subset_1)
+    val_mse_sl_best_random10_subset_3 = mean_squared_error(y_test, sl_yhat_best_random10_subset_3)
+    val_mse_sl_best_random10_subset_5 = mean_squared_error(y_test, sl_yhat_best_random10_subset_5)   
+    val_mse_sl_best_random25_subset_1 = mean_squared_error(y_test, sl_yhat_best_random25_subset_1)
+    val_mse_sl_best_random25_subset_3 = mean_squared_error(y_test, sl_yhat_best_random25_subset_3)
+    val_mse_sl_best_random25_subset_5 = mean_squared_error(y_test, sl_yhat_best_random25_subset_5)  
+    val_mse_sl_best_random50_subset_1 = mean_squared_error(y_test, sl_yhat_best_random50_subset_1)
+    val_mse_sl_best_random50_subset_3 = mean_squared_error(y_test, sl_yhat_best_random50_subset_3)
+    val_mse_sl_best_random50_subset_5 = mean_squared_error(y_test, sl_yhat_best_random50_subset_5)  
+    val_mse_sl_best_random100_subset_1 = mean_squared_error(y_test, sl_yhat_best_random100_subset_1)
+    val_mse_sl_best_random100_subset_3 = mean_squared_error(y_test, sl_yhat_best_random100_subset_3)
+    val_mse_sl_best_random100_subset_5 = mean_squared_error(y_test, sl_yhat_best_random100_subset_5)      
     val_mse_sl_ga_subset = mean_squared_error(y_test, sl_yhat_ga_subset)    
-    val_mse_sl_random_subset = mean_squared_error(y_test, sl_yhat_random_subset)
     val_mse_sl_default_subset = mean_squared_error(y_test, sl_yhat_default_subset)    
     val_mse_discrete_sl = val_mse_all_models[all_indices.index(np.argmin(cv_mse))]
+    # old**
 
     # concatenate performance results 
+    val_mse_list.insert(0, dataset_name)
+    val_mse_list.insert(1, fold)
+    
+    # old**
     iteration_results = [dataset_name, 
                          fold,
                          val_mse_linear_regression,
                          val_mse_sl_full,
-                         val_mse_sl_best_subset_1,
-                         val_mse_sl_best_subset_3,
-                         val_mse_sl_best_subset_5,
+                         val_mse_sl_best_grid_subset_1,
+                         val_mse_sl_best_grid_subset_3,
+                         val_mse_sl_best_grid_subset_5,
+                         val_mse_sl_best_random10_subset_1,
+                         val_mse_sl_best_random10_subset_3,
+                         val_mse_sl_best_random10_subset_5,
+                         val_mse_sl_best_random25_subset_1,
+                         val_mse_sl_best_random25_subset_3,
+                         val_mse_sl_best_random25_subset_5,
+                         val_mse_sl_best_random50_subset_1,
+                         val_mse_sl_best_random50_subset_3,
+                         val_mse_sl_best_random50_subset_5,
+                         val_mse_sl_best_random100_subset_1,
+                         val_mse_sl_best_random100_subset_3,
+                         val_mse_sl_best_random100_subset_5,
                          val_mse_sl_ga_subset,
-                         val_mse_sl_random_subset,
                          val_mse_sl_default_subset,
                          val_mse_discrete_sl]
-
+    # old**
+    
     # organize meta data (i.e. indices and SuperLearner coefficients)
     indices_sl_all = []
-    indices_sl_all.extend(best_cv_mse_indices_1)
-    indices_sl_all.extend(best_cv_mse_indices_3)
-    indices_sl_all.extend(best_cv_mse_indices_5)
+    indices_sl_all.extend(best_grid_cv_mse_indices_1)
+    indices_sl_all.extend(best_grid_cv_mse_indices_3)
+    indices_sl_all.extend(best_grid_cv_mse_indices_5)
+    indices_sl_all.extend(best_random10_cv_mse_indices_1)
+    indices_sl_all.extend(best_random10_cv_mse_indices_3)
+    indices_sl_all.extend(best_random10_cv_mse_indices_5)
+    indices_sl_all.extend(best_random25_cv_mse_indices_1)
+    indices_sl_all.extend(best_random25_cv_mse_indices_3)
+    indices_sl_all.extend(best_random25_cv_mse_indices_5)
+    indices_sl_all.extend(best_random50_cv_mse_indices_1)
+    indices_sl_all.extend(best_random50_cv_mse_indices_3)
+    indices_sl_all.extend(best_random50_cv_mse_indices_5)
+    indices_sl_all.extend(best_random100_cv_mse_indices_1)
+    indices_sl_all.extend(best_random100_cv_mse_indices_3)
+    indices_sl_all.extend(best_random100_cv_mse_indices_5)    
     indices_sl_all.extend(ga_indices)
-    indices_sl_all.extend(random_indices)
     indices_sl_all.extend(default_indices) 
     indices_sl_all.extend(nonzero_mod_discrete)
 
     names_all = []
-    names_all.extend(["bs1"] * len(best_cv_mse_indices_1))
-    names_all.extend(["bs2"] * len(best_cv_mse_indices_3))
-    names_all.extend(["bs3"] * len(best_cv_mse_indices_5))
+    names_all.extend(["gs1"] * len(best_grid_cv_mse_indices_1))
+    names_all.extend(["gs3"] * len(best_grid_cv_mse_indices_3))
+    names_all.extend(["gs5"] * len(best_grid_cv_mse_indices_5))
+    names_all.extend(["r10s1"] * len(best_random10_cv_mse_indices_1))
+    names_all.extend(["r10s3"] * len(best_random10_cv_mse_indices_3))
+    names_all.extend(["r10s5"] * len(best_random10_cv_mse_indices_5))
+    names_all.extend(["r25s1"] * len(best_random25_cv_mse_indices_1))
+    names_all.extend(["r25s3"] * len(best_random25_cv_mse_indices_3))
+    names_all.extend(["r25s5"] * len(best_random25_cv_mse_indices_5))
+    names_all.extend(["r50s1"] * len(best_random50_cv_mse_indices_1))
+    names_all.extend(["r50s3"] * len(best_random50_cv_mse_indices_3))
+    names_all.extend(["r50s5"] * len(best_random50_cv_mse_indices_5))
+    names_all.extend(["r100s1"] * len(best_random100_cv_mse_indices_1))
+    names_all.extend(["r100s3"] * len(best_random100_cv_mse_indices_3))
+    names_all.extend(["r100s5"] * len(best_random100_cv_mse_indices_5))
     names_all.extend(["ga"] * len(ga_indices))
-    names_all.extend(["rnd"] * len(random_indices))
     names_all.extend(["df"] * len(default_indices))
     names_all.extend(["dsc"] * len(nonzero_mod_discrete))
 
@@ -601,29 +806,62 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, fo
 
     indices_sl_nonzero = []
     indices_sl_nonzero.extend(nonzero_mod_full)
-    indices_sl_nonzero.extend(nonzero_mod_best_subset_1)
-    indices_sl_nonzero.extend(nonzero_mod_best_subset_3)
-    indices_sl_nonzero.extend(nonzero_mod_best_subset_5)
+    indices_sl_nonzero.extend(nonzero_mod_best_grid_subset_1)
+    indices_sl_nonzero.extend(nonzero_mod_best_grid_subset_3)
+    indices_sl_nonzero.extend(nonzero_mod_best_grid_subset_5)
+    indices_sl_nonzero.extend(nonzero_mod_best_random10_subset_1)
+    indices_sl_nonzero.extend(nonzero_mod_best_random10_subset_3)
+    indices_sl_nonzero.extend(nonzero_mod_best_random10_subset_5)
+    indices_sl_nonzero.extend(nonzero_mod_best_random25_subset_1)
+    indices_sl_nonzero.extend(nonzero_mod_best_random25_subset_3)
+    indices_sl_nonzero.extend(nonzero_mod_best_random25_subset_5)
+    indices_sl_nonzero.extend(nonzero_mod_best_random50_subset_1)
+    indices_sl_nonzero.extend(nonzero_mod_best_random50_subset_3)
+    indices_sl_nonzero.extend(nonzero_mod_best_random50_subset_5)
+    indices_sl_nonzero.extend(nonzero_mod_best_random100_subset_1)
+    indices_sl_nonzero.extend(nonzero_mod_best_random100_subset_3)
+    indices_sl_nonzero.extend(nonzero_mod_best_random100_subset_5)
     indices_sl_nonzero.extend(nonzero_mod_ga_subset)
-    indices_sl_nonzero.extend(nonzero_mod_random_subset)
     indices_sl_nonzero.extend(nonzero_mod_default_subset)
 
     coef_sl_nonzero = []
     coef_sl_nonzero.extend(nz_meta_coef_full)
-    coef_sl_nonzero.extend(nz_meta_coef_best_subset_1)
-    coef_sl_nonzero.extend(nz_meta_coef_best_subset_3)
-    coef_sl_nonzero.extend(nz_meta_coef_best_subset_5)
+    coef_sl_nonzero.extend(nz_meta_coef_best_grid_subset_1)
+    coef_sl_nonzero.extend(nz_meta_coef_best_grid_subset_3)
+    coef_sl_nonzero.extend(nz_meta_coef_best_grid_subset_5)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random10_subset_1)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random10_subset_3)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random10_subset_5)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random25_subset_1)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random25_subset_3)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random25_subset_5)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random50_subset_1)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random50_subset_3)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random50_subset_5)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random100_subset_1)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random100_subset_3)
+    coef_sl_nonzero.extend(nz_meta_coef_best_random100_subset_5)
     coef_sl_nonzero.extend(nz_meta_coef_ga_subset)
-    coef_sl_nonzero.extend(nz_meta_coef_random_subset)
     coef_sl_nonzero.extend(nz_meta_coef_default_subset)
 
     names_nonzero = []
     names_nonzero.extend(["full"] * len(nonzero_mod_full))
-    names_nonzero.extend(["bs1"] * len(nonzero_mod_best_subset_1))
-    names_nonzero.extend(["bs3"] * len(nonzero_mod_best_subset_3))
-    names_nonzero.extend(["bs5"] * len(nonzero_mod_best_subset_5))
+    names_nonzero.extend(["gs1"] * len(nonzero_mod_best_grid_subset_1))
+    names_nonzero.extend(["gs3"] * len(nonzero_mod_best_grid_subset_3))
+    names_nonzero.extend(["gs5"] * len(nonzero_mod_best_grid_subset_5))
+    names_nonzero.extend(["r10s1"] * len(nonzero_mod_best_random10_subset_1))
+    names_nonzero.extend(["r10s3"] * len(nonzero_mod_best_random10_subset_3))
+    names_nonzero.extend(["r10s5"] * len(nonzero_mod_best_random10_subset_5))
+    names_nonzero.extend(["r25s1"] * len(nonzero_mod_best_random25_subset_1))
+    names_nonzero.extend(["r25s3"] * len(nonzero_mod_best_random25_subset_3))
+    names_nonzero.extend(["r25s5"] * len(nonzero_mod_best_random25_subset_5))
+    names_nonzero.extend(["r50s1"] * len(nonzero_mod_best_random50_subset_1))
+    names_nonzero.extend(["r50s3"] * len(nonzero_mod_best_random50_subset_3))
+    names_nonzero.extend(["r50s5"] * len(nonzero_mod_best_random50_subset_5))
+    names_nonzero.extend(["r100s1"] * len(nonzero_mod_best_random100_subset_1))
+    names_nonzero.extend(["r100s3"] * len(nonzero_mod_best_random100_subset_3))
+    names_nonzero.extend(["r100s5"] * len(nonzero_mod_best_random100_subset_5))
     names_nonzero.extend(["ga"] * len(nonzero_mod_ga_subset))
-    names_nonzero.extend(["rnd"] * len(nonzero_mod_random_subset))
     names_nonzero.extend(["df"] * len(nonzero_mod_default_subset))
 
     dataset_name_nonzero = [dataset_name] * len(indices_sl_nonzero)
@@ -650,8 +888,9 @@ def runEvaluationIteration(X, y, all_models, dataset_name):
     Returns:
         list: validation MSE for linear model and each hyperparameter tuning
               strategy; specifically: [linear model, full SuperLearner,
-              best per model type, 3 best per model type, 5 best per model type,
-              genetic algorithm selection, random subset, default hyperparameters,
+              best per model type (via full grid search), 3 best per model type
+              (via full grid search), 5 best per model type (via full grid search),
+              genetic algorithm selection, default hyperparameters,
               discrete SuperLearner]
     """
 
