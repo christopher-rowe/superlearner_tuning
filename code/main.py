@@ -22,7 +22,7 @@ def main():
     np.random.seed(seed = 6053)
 
     # looping through datasets
-    for dataset in regression_dataset_names[0:1]:
+    for dataset in regression_dataset_names[0:2]:
 
         # print statement
         print("Working on " + dataset + "...")
@@ -44,7 +44,7 @@ def main():
 
         # actual validation metrics
         all_results_single_dataset = pd.DataFrame(all_results_single_dataset, 
-                                                  columns = ['dataset', 'fold', 'linear_regression',
+                                                  columns = ['dataset', 'fold', 'linear_mod',
                                                              'sl_full', 'sl_best_grid_1',
                                                              'sl_best_grid_3', 'sl_best_grid_5',
                                                              'sl_best_random10_1', 'sl_best_random10_3', 
@@ -53,7 +53,7 @@ def main():
                                                              'sl_best_random50_1', 'sl_best_random50_3', 
                                                              'sl_best_random50_5', 'sl_best_random100_1', 
                                                              'sl_best_random100_3', 'sl_best_random100_5',                                                                    
-                                                             'sl_ga_subset', 'sl_default_subset', 
+                                                             'sl_default_subset', 'sl_ga_subset',
                                                              'discrete_sl'])
 
         # indices for base learners selected as input into SuperLearner                                      
@@ -64,7 +64,7 @@ def main():
         # indices and weights for baselearners incorporated into SuperLearner                                     
         all_sl_nonzero_single_dataset = pd.DataFrame(all_sl_nonzero_single_dataset,  
                                                      columns = ['dataset', 'fold', 'strategy', 
-                                                                'index', 'weight'])
+                                                                'index', 'sl_weight'])
 
         # CV MSE for all base learners
         all_cv_mse_single_dataset_columns = list(range(len(all_cv_mse_single_dataset[0]) - 2))
