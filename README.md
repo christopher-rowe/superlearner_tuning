@@ -21,8 +21,6 @@ The above strategies are implemented on set of 98 benchmark datasets available v
   - models.py : hyperparameter specifications to be considered 
   - main.py : main study script for running on local machine
   - main_parallel.py : main study script for running in parallel on high performance computing cluster (HPCC)
-- **\results**
-  - **\raw**
-  - **\processed**
-- **\notebooks**
-- **\reports**
+- **\results** (pending)
+- **\notebooks** (pending)
+- **\reports** (pending)
