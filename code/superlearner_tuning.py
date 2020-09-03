@@ -2,6 +2,7 @@
 import os
 import pandas as pd 
 import numpy as np
+import time
 from pyeasyga import pyeasyga
 from scipy.optimize import nnls
 from sklearn.metrics import mean_squared_error
@@ -11,7 +12,7 @@ from sklearn.base import clone
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
 from sklearn.neighbors import KNeighborsRegressor
-
+import dask.multiprocessing
 
 def getAllModels(model_specs):
     """Generate list of base models from pre-specified model specifications
@@ -421,14 +422,20 @@ def identifyNonZeroIndices(coefs, og_indices):
     # return
     return model_indices
 
-def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, fold):
+def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, dataset_num, fold):
+
+    # start time and shape statement (fold)
+    fold_start_time = time.perf_counter()
+    fold_start_statement = '--Fold starting (' + str(fold) + ') for dataset ' + str(dataset_num) + '; '
+    fold_shape_statement = 'shape=' + str(X_train.shape)
+    print(fold_start_statement + fold_shape_statement) 
 
     # get out of sample predictions and cv mse for each base model
-    print('--Getting CV MSE and predictions for all base learners...')
+    #print('--Getting CV MSE and predictions for all base learners...')
     meta_X, meta_y, cv_mse = getMSEandPredictions(X_train, y_train, all_models)
 
     # get indices for each hyperparameter strategy
-    print('--Getting model indices for each strategy...')
+    #print('--Getting model indices for each strategy...')
 
     # initialize function arguments to get each set of indices
     mod_index_params = [{'model_list': all_models, 'subset': 'best_grid', 
@@ -467,17 +474,17 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, fo
     # List Order: full, grid * 3, random * 12, default, genetic
     indices_list = [getModelIndices(**params) for params in mod_index_params]
     indices_list.insert(0, list(range(len(all_models)))) # all indices for "full" superlearner
-    print('--Running genetic algorithm...')
+    #print('--Running genetic algorithm...')
     indices_list.append(getGeneticIndices(meta_X, meta_y)) # genetic indices
 
     # subset meta_X (i.e. base learner predictions) for each tuning strategy
     # List Order: full, grid * 3, random * 12, default, genetic
-    print('--Subsetting base learner predictions for each strategy...')
+    #print('--Subsetting base learner predictions for each strategy...')
     meta_X_list = [subsetMetaX(meta_X, inds) for inds in indices_list]
 
     # fit all SuperLearners and obtain coefficients (both full vector and only non-zero)
     # List Order: full, grid * 3, random * 12, default, genetic
-    print('--Fitting SuperLearner for each strategy...')
+    #print('--Fitting SuperLearner for each strategy...')
     meta_coef_list, nz_meta_coef_list = zip(*[fitMetaModel(x, meta_y) for x in meta_X_list])
     meta_coef_list = list(meta_coef_list)
     nz_meta_coef_list = list(nz_meta_coef_list)
@@ -493,11 +500,11 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, fo
     all_indices.sort()
 
     # fit minimal base models (those with non-zero SuperLearner weights) on entire training dataset
-    print('--Fitting minimal base models on entire training dataset...')
+    #print('--Fitting minimal base models on entire training dataset...')
     fitBaseModels(X_train, y_train, all_models, all_indices)
 
     # evaluate minimal base models (those with non-zero SuperLearner weights) on test set
-    print('--Evaluating performance...')
+    #print('--Evaluating performance...')
     val_mse_all_models = evaluateBaseModels(X_test, y_test, all_models, all_indices)
 
     # subset minimal models (those with non-zero SuperLearner weights) for each tuning strategy 
@@ -568,18 +575,26 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, fo
     # 1. sl_all : indices for models input into SuperLearner for each tuning strategy
     # 2. sl_nonzero : indices and weights for models with non-zero SuperLearner weights 
     #    for each tuning strategy
-    sl_all = list(zip(dataset_name_all, fold_all, names_all, indices_sl_all))
-    sl_nonzero = list(zip(dataset_name_nonzero, fold_nonzero, names_nonzero, indices_sl_nonzero, coef_sl_nonzero))
+    sl_all = [list(a) for a in zip(dataset_name_all, fold_all, names_all, indices_sl_all)]
+    sl_nonzero = [list(a) for a in zip(dataset_name_nonzero, fold_nonzero, names_nonzero, 
+                                       indices_sl_nonzero, coef_sl_nonzero)]
 
     # save within-fold cv_mse for each fold
     cv_mse = cv_mse.tolist()
     cv_mse.insert(0, dataset_name)
     cv_mse.insert(1, fold)
 
-    # return results
-    return val_mse_list, sl_all, sl_nonzero, cv_mse
+    # end time and statement (fold)
+    fold_elapsed_time = round((time.perf_counter() - fold_start_time)/60, 1)
+    fold_end_statement = '--Fold complete (' + str(fold) + ') for dataset ' + str(dataset_num) + '; '
+    fold_time_statement = 'time=' + str(fold_elapsed_time) + 'm; '
+    print(fold_end_statement + fold_time_statement + fold_shape_statement)
 
-def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num):
+    # return results
+    # val_mse_list & cv_mse: list; sl_all & sl_nonzero: list of lists
+    return [val_mse_list, sl_all, sl_nonzero, cv_mse]
+
+def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num, parallel=False):
     """Run single iteration of performance experiement
 
     Args:
@@ -587,7 +602,8 @@ def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num):
         y (numpy array): Full outcome vector (incl. train and test)
         all_models (list): Full list of candidate base model objects 
         dataset_name (str): dataset name for saving meta-data
-
+        dataset_num (int): dataset number for print statements
+        parallel (bool): whether computations are parallelized
     Returns:
         list: validation MSE for linear model and each hyperparameter tuning
               strategy; specifically: [linear model, full SuperLearner,
@@ -597,36 +613,44 @@ def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num):
               discrete SuperLearner]
     """
 
-    # print statement
-    print("Working on dataset # " + str(dataset_num))
-
     # initialize empty results lists
-    all_results_fold = []
-    all_sl_all_fold = []
-    all_sl_nonzero_fold = []
-    all_cv_mse_fold = []
+    if parallel==False:
+        all_results_fold = []
+        all_sl_all_fold = []
+        all_sl_nonzero_fold = []
+        all_cv_mse_fold = []
+    if parallel==True:
+        parallel_fold = []
 
     # initiate 10-fold cross validation
     kf = KFold(n_splits=10)
     fold = 1
     for train_index, test_index in kf.split(X):
 
-        # initiation statement
-        print('--Starting Fold! Dataset: ' + dataset_name + '; Fold: ' + str(fold))
-
         # subset train and test data
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
-
+       
         # run single fold
-        fold_output = runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, fold)
-        all_results_fold.append(fold_output[0])
-        all_sl_all_fold.extend(fold_output[1])
-        all_sl_nonzero_fold.extend(fold_output[2])
-        all_cv_mse_fold.append(fold_output[3])      
+        if parallel==False:
+            fold_output = runSingleFold(X_train, y_train, X_test, y_test, all_models, 
+                                        dataset_name, dataset_num, fold)
+            all_results_fold.append(fold_output[0])
+            all_sl_all_fold.extend(fold_output[1])
+            all_sl_nonzero_fold.extend(fold_output[2])
+            all_cv_mse_fold.append(fold_output[3])      
 
-        print('--Fold Complete! Dataset: ' + dataset_name + '; Fold: ' + str(fold))  
+        if parallel==True:
+            fold_output = dask.delayed(runSingleFold)(X_train, y_train, X_test, 
+                                                      y_test, all_models, dataset_name, 
+                                                      dataset_num, fold)
+            parallel_fold.append(fold_output)
+
+        # increment fold counter
         fold = fold + 1
 
     # return results
-    return all_results_fold, all_sl_all_fold, all_sl_nonzero_fold, all_cv_mse_fold
+    if parallel==False:
+        return all_results_fold, all_sl_all_fold, all_sl_nonzero_fold, all_cv_mse_fold
+    if parallel==True:
+        return parallel_fold # list of lists (of lists)

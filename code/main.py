@@ -2,10 +2,11 @@
 import os
 import numpy as np
 import pandas as pd
-from pmlb import classification_dataset_names, regression_dataset_names, fetch_data
+from pmlb import fetch_data
 from sklearn.preprocessing import StandardScaler
 import superlearner_tuning as slt
 from models_test import *
+from datasets import *
 
 def main():
 
@@ -22,12 +23,10 @@ def main():
     np.random.seed(seed = 6053)
 
     # looping through datasets
-    for dataset in regression_dataset_names[0:2]:
-
-        # print statement
-        print("Working on " + dataset + "...")
+    for dataset in regression_datasets[0:1]:
 
         # get data
+        dataset_num = regression_datasets.index(dataset)
         X, y = fetch_data(dataset, return_X_y=True)
 
         # standardize features and outcome
@@ -36,7 +35,10 @@ def main():
         y = np.squeeze(scaler.fit_transform(y.reshape(-1, 1)))
 
         # collected iterations
-        iteration_output = slt.runEvaluationIteration(X, y, all_models, dataset_name = dataset)
+        iteration_output = slt.runEvaluationIteration(X, y, 
+                                                      all_models, 
+                                                      dataset_name=dataset,
+                                                      dataset_num=dataset_num)
         all_results_single_dataset = iteration_output[0]
         all_sl_all_single_dataset = iteration_output[1]
         all_sl_nonzero_single_dataset = iteration_output[2]
@@ -77,9 +79,6 @@ def main():
         all_sl_all = pd.concat([all_sl_all, all_sl_all_single_dataset], ignore_index=True)
         all_sl_nonzero = pd.concat([all_sl_nonzero, all_sl_nonzero_single_dataset], ignore_index=True)
         all_cv_mse = pd.concat([all_cv_mse, all_cv_mse_single_dataset], ignore_index=True)
-
-        # print statement
-        print("Finished with " + dataset + "!")
 
     # model and parameters
     all_model_types = [type(model).__name__ for model in all_models]
