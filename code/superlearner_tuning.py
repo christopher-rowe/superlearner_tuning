@@ -103,7 +103,7 @@ def getMSEandPredictions(X, y, models):
     
     return np.vstack(meta_X), np.asarray(meta_y), mean_cv_mse
 
-def getModelIndices(model_list, subset, cv_mse = None, n_random_iter = None, num_models = None):
+def getModelIndices(model_list, subset, cv_mse = None, random_pct = None, num_models = None):
     """Get model indices to allow subsetting of models and out-of-sample
        predictions
 
@@ -118,8 +118,9 @@ def getModelIndices(model_list, subset, cv_mse = None, n_random_iter = None, num
                                  subset option, list of CV MSE for each model type, 
                                  allows for identification of 'best' models. 
                                  Defaults to None.
-        n_random_iter (int, optional): Only needed for 'best_random' subset option, 
-                                       number of random iterations to identify
+        random_pct (int, optional): Only needed for 'best_random' subset option, 
+                                       percent of hyperparameter grid to
+                                       search in order to to identify
                                        'best' models via random grid search. 
                                        Defaults to None.
         num_models (int, optional): Only needed for 'best' subset option,
@@ -151,9 +152,10 @@ def getModelIndices(model_list, subset, cv_mse = None, n_random_iter = None, num
         all_cv_mse = pd.DataFrame({'type': model_type,
                                    'mse': cv_mse})
 
-        # identify random subset based on number of random iterations
-        all_cv_mse = all_cv_mse.sample(frac = 1.0).groupby('type').head(n_random_iter)                           
-
+        # identify random subset based on pct of hyperparameter space
+        random_prop = random_pct/100                
+        all_cv_mse = all_cv_mse.groupby('type').apply(lambda x: x.sample(n=int(np.ceil(random_prop*len(x)))))
+        all_cv_mse.index = all_cv_mse.index.droplevel(level=0)
 
         # identify indices for (num_models) models with minimum mse for each model type
         multi_indices = all_cv_mse.groupby('type')['mse'].nsmallest(num_models).index
@@ -175,6 +177,11 @@ def getModelIndices(model_list, subset, cv_mse = None, n_random_iter = None, num
         for mod in default_model_types:
             default_model = eval(mod + '()')
             default_hp.append(default_model.get_params())
+
+        # loop through and update max_iter to 100000 if relevant
+        for mod in default_hp:
+            if 'max_iter' in list(mod.keys()):
+                mod['max_iter'] = 100000
 
         # get indices for models with default hyperperameters
         indices = []
@@ -348,6 +355,9 @@ def getGeneticIndices(meta_X, meta_y):
         # get indices for individual 
         ga_indices = [i for i, x in enumerate(individual) if x == 1]
 
+        # save all indices
+        all_ga_indices.append(ga_indices) 
+
         # subset meta_X columns (i.e., base models) using ga indices
         meta_X_ga_i = subsetMetaX(meta_X, ga_indices)
 
@@ -388,14 +398,20 @@ def getGeneticIndices(meta_X, meta_y):
     # specify fitness function
     ga.fitness_function = fitness
 
+    # initialize empty list to store all individuals assessed
+    all_ga_indices = []
+
     # run genetic algorithm
     ga.run()
 
     # get final ga indices
     final_ga_indices = [i for i, x in enumerate(ga.best_individual()[1]) if x == 1]
 
+    # get number of unique models run
+    ga_num_models = len(set(x for l in all_ga_indices for x in l))
+
     # return indices
-    return final_ga_indices
+    return final_ga_indices, ga_num_models
 
 def identifyNonZeroIndices(coefs, og_indices):
     """Compress indices such that only indices that are used in SuperLearner meta
@@ -445,55 +461,51 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, da
                         {'model_list': all_models, 'subset': 'best_grid', 
                          'cv_mse': cv_mse, 'num_models': 5},
                         {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 10, 'num_models': 1},    
+                         'cv_mse': cv_mse, 'random_pct': 10, 'num_models': 1},    
                         {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 10, 'num_models': 3},  
+                         'cv_mse': cv_mse, 'random_pct': 10, 'num_models': 3},  
                         {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 10, 'num_models': 5},  
+                         'cv_mse': cv_mse, 'random_pct': 10, 'num_models': 5},  
                         {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 25, 'num_models': 1},  
+                         'cv_mse': cv_mse, 'random_pct': 25, 'num_models': 1},  
                         {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 25, 'num_models': 3},  
+                         'cv_mse': cv_mse, 'random_pct': 25, 'num_models': 3},  
                         {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 25, 'num_models': 5},                                                                                                                           
+                         'cv_mse': cv_mse, 'random_pct': 25, 'num_models': 5},                                                                                                                           
                          {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 50, 'num_models': 1},  
+                         'cv_mse': cv_mse, 'random_pct': 50, 'num_models': 1},  
                         {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 50, 'num_models': 3},  
+                         'cv_mse': cv_mse, 'random_pct': 50, 'num_models': 3},  
                         {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 50, 'num_models': 5},       
-                        {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 100, 'num_models': 1},  
-                        {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 100, 'num_models': 3},  
-                        {'model_list': all_models, 'subset': 'best_random', 
-                         'cv_mse': cv_mse, 'n_random_iter': 100, 'num_models': 5},
+                         'cv_mse': cv_mse, 'random_pct': 50, 'num_models': 5},       
                         {'model_list': all_models, 'subset': 'default'}]
 
     # get indices (i.e., models input in SuperLearner) for each tuning strategy
-    # List Order: full, grid * 3, random * 12, default, genetic
+    # List Order: full, grid * 3, random * 9, default, genetic
     indices_list = [getModelIndices(**params) for params in mod_index_params]
     indices_list.insert(0, list(range(len(all_models)))) # all indices for "full" superlearner
     #print('--Running genetic algorithm...')
-    indices_list.append(getGeneticIndices(meta_X, meta_y)) # genetic indices
+    final_ga_indices, num_ga_models = getGeneticIndices(meta_X, meta_y)
+    indices_list.append(final_ga_indices) # genetic indices
 
     # subset meta_X (i.e. base learner predictions) for each tuning strategy
-    # List Order: full, grid * 3, random * 12, default, genetic
+    # List Order: full, grid * 3, random * 9, default, genetic
     #print('--Subsetting base learner predictions for each strategy...')
     meta_X_list = [subsetMetaX(meta_X, inds) for inds in indices_list]
 
     # fit all SuperLearners and obtain coefficients (both full vector and only non-zero)
-    # List Order: full, grid * 3, random * 12, default, genetic
+    # List Order: full, grid * 3, random * 9, default, genetic
     #print('--Fitting SuperLearner for each strategy...')
     meta_coef_list, nz_meta_coef_list = zip(*[fitMetaModel(x, meta_y) for x in meta_X_list])
     meta_coef_list = list(meta_coef_list)
     nz_meta_coef_list = list(nz_meta_coef_list)
 
     # identify model indices corresponding to non-zero SuperLearner coefficients for each tuning strategy
-    # List Order: linear, full, grid * 3, random * 12, detault, ga, discrete
+    # List Order: linear, full, grid * 3, random * 9, default, ga, discrete
     nonzero_mod_list = [identifyNonZeroIndices(x, y) for x, y in zip(meta_coef_list, indices_list)]
     nonzero_mod_list.insert(0, [0]) # add index for linear model
-    nonzero_mod_list.append([np.argmin(cv_mse).astype(int)]) # add index for discrete superlearner
+    discrete_index = np.argmin(cv_mse).astype(int)
+    nonzero_mod_list.append([discrete_index]) # add index for discrete superlearner
 
     # identify unique indices for models with non-zero SuperLearner coefficients
     all_indices = list(set([item for sublist in nonzero_mod_list for item in sublist]))
@@ -510,22 +522,22 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, da
     # subset minimal models (those with non-zero SuperLearner weights) for each tuning strategy 
     # note: prediction and evaluation of linear model and discrete SuperLearner are handled
     #       separately from true SuperLearners
-    # List Order: full, grid * 3, random * 12, detault, ga
+    # List Order: full, grid * 3, random * 9, detault, ga
     del nonzero_mod_list[0] # drop linear regression (requires only single model)
     del nonzero_mod_list[-1] # drop discrete superlearner (requires only single model)
     models_list = [subsetModels(all_models, x) for x in nonzero_mod_list]
 
 
     # obtain SuperLearner Predictions for each tuning strategy
-    # List Order: full, grid * 3, random * 12, detault, ga (linear and discrete don't need this function)
+    # List Order: full, grid * 3, random * 9, detault, ga (linear and discrete don't need this function)
     sl_yhat_list = [superLearnerPredictions(X_test, x, y) for x, y in zip(models_list, nz_meta_coef_list)]
 
     # evaluate performance of each SuperLearner against test data and save as list
     # note: adding in linear model and discrete SuperLearner performance seaprately
-    # List Order: linear, full, grid * 3, random * 12, default, ga, discrete
+    # List Order: linear, full, grid * 3, random * 9, default, ga, discrete
     val_mse_list = [mean_squared_error(y_test, x) for x in sl_yhat_list]
     val_mse_list.insert(0, val_mse_all_models[0]) # linear regression
-    val_mse_list.append(val_mse_all_models[all_indices.index(np.argmin(cv_mse))]) # discrete superlearner
+    val_mse_list.append(val_mse_all_models[all_indices.index(discrete_index)]) # discrete superlearner
 
     # add dataset and name to list of results
     val_mse_list.insert(0, dataset_name)
@@ -534,12 +546,12 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, da
     # organize meta data
 
     # indices of models included for each tuning strategy (i.e. models input into SuperLearners)
-    # (Order: grid * 3, random * 12, default, genetic, discrete)
+    # (Order: grid * 3, random * 9, default, genetic, discrete)
 
     # initialize names for each strategy of appropriate length
     names = ['gs1', 'gs3', 'gs5', 'r10s1', 'r10s3', 'r10s5',
              'r25s1', 'r25s3', 'r25s5', 'r50s1', 'r50s3', 'r50s5',
-             'r100s1', 'r100s3', 'r100s5', 'df', 'ga']
+             'df', 'ga']
     del indices_list[0] # delete full indices
     names_all = [[x] * len(y) for x, y in zip(names, indices_list)]
     names_all = [item for sublist in names_all for item in sublist]
@@ -547,14 +559,14 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, da
 
     # flatten indices of models included for each tuning strategy
     indices_sl_all = [item for sublist in indices_list for item in sublist]
-    indices_sl_all.append(np.argmin(cv_mse)) # add discrete to end
+    indices_sl_all.append(discrete_index) # add discrete to end
 
     # initialize dataset name and fold
     dataset_name_all = [dataset_name] * len(indices_sl_all)
     fold_all = [fold] * len(indices_sl_all)
 
     # indices for models with non-zero weights and weight values (i.e. SuperLearners)
-    # (Order: full, grid * 3, random * 12, default, genetic, discrete)
+    # (Order: full, grid * 3, random * 9, default, genetic, discrete)
 
     # initialize names for each strategy of appropriate length
     names.insert(0, 'full') # add "full" to names list
@@ -584,6 +596,30 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, da
     cv_mse.insert(0, dataset_name)
     cv_mse.insert(1, fold)
 
+    # organize observed outcomes and all predictions
+    # (Order: dataset, fold, observed outcomes, linear model, full, grid * 3, 
+    #         random * 9, default, genetic, discrete)
+
+    # all superlearner predictions (full, grid * 3, random * 9, default, ga)
+    y_preds = sl_yhat_list.copy()
+
+    # add observed outcomes
+    y_preds.insert(0, y_test)
+
+    # obtain linear regression and discrete SL predictions
+    lm_yhat = all_models[0].predict(X_test)
+    discrete_yhat = all_models[discrete_index].predict(X_test)
+
+    # add to matrix of predicted outcomes
+    y_preds.insert(1, lm_yhat)
+    y_preds.append(discrete_yhat)
+
+    # add dataset and fold
+    dataset_name_y_preds = np.array([dataset_name] * len(y_test))
+    fold_nonzero = np.array([fold] * len(y_test))
+    y_preds.insert(0, dataset_name_y_preds)
+    y_preds.insert(1, fold_nonzero)
+
     # end time and statement (fold)
     fold_elapsed_time = round((time.perf_counter() - fold_start_time)/60, 1)
     fold_end_statement = '--Fold complete (' + str(fold) + ') for dataset ' + str(dataset_num) + '; '
@@ -592,7 +628,8 @@ def runSingleFold(X_train, y_train, X_test, y_test, all_models, dataset_name, da
 
     # return results
     # val_mse_list & cv_mse: list; sl_all & sl_nonzero: list of lists
-    return [val_mse_list, sl_all, sl_nonzero, cv_mse]
+    return [val_mse_list, sl_all, sl_nonzero, cv_mse, 
+           num_ga_models, y_preds]
 
 def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num, parallel=False):
     """Run single iteration of performance experiement
@@ -619,12 +656,15 @@ def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num, parallel
         all_sl_all_fold = []
         all_sl_nonzero_fold = []
         all_cv_mse_fold = []
+        all_num_ga_models = []
+        all_cv_y_preds = []
     if parallel==True:
         parallel_fold = []
 
     # initiate 10-fold cross validation
     kf = KFold(n_splits=10)
     fold = 1
+    train_index, test_index = next(kf.split(X)) ####################################################
     for train_index, test_index in kf.split(X):
 
         # subset train and test data
@@ -639,7 +679,8 @@ def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num, parallel
             all_sl_all_fold.extend(fold_output[1])
             all_sl_nonzero_fold.extend(fold_output[2])
             all_cv_mse_fold.append(fold_output[3])      
-
+            all_num_ga_models.append(fold_output[4])
+            all_cv_y_preds.append(fold_output[5])
         if parallel==True:
             fold_output = dask.delayed(runSingleFold)(X_train, y_train, X_test, 
                                                       y_test, all_models, dataset_name, 
@@ -651,6 +692,7 @@ def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num, parallel
 
     # return results
     if parallel==False:
-        return all_results_fold, all_sl_all_fold, all_sl_nonzero_fold, all_cv_mse_fold
+        return (all_results_fold, all_sl_all_fold, all_sl_nonzero_fold, 
+        all_cv_mse_fold, all_num_ga_models, all_cv_y_preds)
     if parallel==True:
         return parallel_fold # list of lists (of lists)
