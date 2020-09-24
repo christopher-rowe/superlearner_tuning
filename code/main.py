@@ -9,6 +9,17 @@ from models_test import *
 from datasets import *
 
 def main():
+    
+    n = []
+    p = []
+    for dataset in regression_datasets:
+        X, y = fetch_data(dataset, return_X_y=True)
+        n.append(X.shape[0])
+        p.append(X.shape[1])
+    dataset_info = pd.DataFrame({'dataset' : regression_datasets,
+                                 'n' : n,
+                                 'p' : p})
+
 
     # generate list of all models
     all_models = slt.getAllModels(model_specs)
@@ -121,6 +132,7 @@ def main():
 
     # export
     os.chdir(os.path.dirname(os.getcwd()))
+    dataset_info.to_csv('results/dataset_info.csv', index = False)
     all_results.to_csv('results/results.csv', index = False)
     all_sl_all.to_csv('results/sl_inputs.csv', index = False)
     all_sl_nonzero.to_csv('results/sl_weights.csv', index = False)
