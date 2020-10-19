@@ -664,7 +664,6 @@ def runEvaluationIteration(X, y, all_models, dataset_name, dataset_num, parallel
     # initiate 10-fold cross validation
     kf = KFold(n_splits=10)
     fold = 1
-    train_index, test_index = next(kf.split(X)) ####################################################
     for train_index, test_index in kf.split(X):
 
         # subset train and test data
